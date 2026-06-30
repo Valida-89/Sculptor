@@ -1,0 +1,165 @@
+<!DOCTYPE html>  
+<html lang="ru">  
+<head>  
+    <meta charset="UTF-8">  
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">  
+    <meta name="apple-mobile-web-app-capable" content="yes">  
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">  
+    <title>Скульптор Света</title>  
+    <style>  
+        * { margin: 0; padding: 0; box-sizing: border-box; }  
+        body {  
+            background: #0a0a0a;  
+            color: #fff;  
+            font-family: -apple-system, 'Helvetica Neue', sans-serif;  
+            min-height: 100vh;  
+            display: flex;  
+            flex-direction: column;  
+            align-items: center;  
+            -webkit-tap-highlight-color: transparent;  
+            user-select: none;  
+            -webkit-user-select: none;  
+        }  
+        .header { text-align: center; padding: 20px 16px 8px; width: 100%; }  
+        .header h1 { font-size: 26px; font-weight: 700; background: linear-gradient(135deg, #d4a574, #f7d6b3); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 4px; }  
+        .header p { font-size: 13px; color: #999; }  
+        .btn-row { display: flex; gap: 10px; padding: 8px 16px; width: 100%; }  
+        .btn { flex: 1; padding: 12px 0; border-radius: 14px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; text-align: center; }  
+        .btn-camera { background: #1c1c1e; color: #fff; border: 1px solid #3a3a3c; }  
+        .btn-gallery { background: #007aff; color: #fff; }  
+        .btn:active { transform: scale(0.96); opacity: 0.8; }  
+        .preview-container { position: relative; width: calc(100% - 32px); max-width: 500px; margin: 12px 16px; border-radius: 20px; overflow: hidden; background: #1c1c1e; aspect-ratio: 3/4; }  
+        #preview { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }  
+        #depthOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }  
+        .light-controls { width: calc(100% - 32px); max-width: 500px; padding: 16px; background: #1c1c1e; border-radius: 20px; margin: 0 16px; }  
+        .label { font-size: 13px; color: #999; margin-bottom: 6px; text-align: center; }  
+        .slider-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }  
+        .slider-row span { font-size: 12px; color: #666; width: 50px; text-align: center; }  
+        input[type="range"] { flex: 1; -webkit-appearance: none; height: 6px; border-radius: 3px; background: #3a3a3c; outline: none; }  
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px; border-radius: 50%; background: #d4a574; box-shadow: 0 0 16px rgba(212, 165, 116, 0.5); cursor: pointer; }  
+        .loading { display: none; text-align: center; padding: 8px; color: #d4a574; font-size: 13px; }  
+        .loading.active { display: block; }  
+        .style-chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; padding: 4px 0; }  
+        .chip { padding: 8px 16px; border-radius: 20px; border: 1px solid #3a3a3c; background: transparent; color: #ccc; font-size: 13px; cursor: pointer; transition: all 0.2s; }  
+        .chip.active { background: #d4a574; border-color: #d4a574; color: #000; font-weight: 600; }  
+        .debug-info { font-size: 11px; color: #666; text-align: center; margin-top: 8px; min-height: 16px; }  
+    </style>  
+</head>  
+<body>  
+    <div class="header"><h1>🗿 Скульптор Света</h1><p>Загрузи фото и двигай свет</p></div>  
+    <div class="btn-row">  
+        <button class="btn btn-camera" onclick="openCamera()">📷 Камера</button>  
+        <button class="btn btn-gallery" onclick="openGallery()">🖼 Галерея</button>  
+        <input type="file" id="fileInput" accept="image/*" style="display:none">  
+    </div>  
+    <div class="preview-container"><img id="preview" alt="Загрузите фото"><canvas id="depthOverlay"></canvas></div>  
+    <div class="loading" id="loading">⚡ Обработка нейросетью...</div>  
+    <div class="light-controls">  
+        <div class="label">💡 Направление света</div>  
+        <div class="slider-row"><span>Горизонт</span><input type="range" id="azimuth" min="0" max="360" value="45" oninput="updateLight()"><span id="azVal">45°</span></div>  
+        <div class="slider-row"><span>Высота</span><input type="range" id="elevation" min="0" max="90" value="45" oninput="updateLight()"><span id="elVal">45°</span></div>  
+        <div class="label" style="margin-top:8px;">🎨 Стиль</div>  
+        <div class="style-chips">  
+            <button class="chip active" onclick="setStyle('marble', this)">Мрамор</button>  
+            <button class="chip" onclick="setStyle('stone', this)">Камень</button>  
+            <button class="chip" onclick="setStyle('metal', this)">Металл</button>  
+            <button class="chip" onclick="setStyle('clay', this)">Глина</button>  
+        </div>  
+    </div>  
+    <div class="debug-info" id="debug"></div>  
+<script type="module">  
+import { pipeline } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';  
+let depthData = null, depthWidth = 0, depthHeight = 0, currentStyle = 'marble', currentImage = null;  
+const loadingEl = document.getElementById('loading'), debugEl = document.getElementById('debug'), fileInput = document.getElementById('fileInput');  
+function log(msg) { console.log(msg); if (debugEl) debugEl.textContent = msg; }  
+loadingEl.classList.add('active'); loadingEl.textContent = '🔄 Загрузка нейросети... (первый раз ~30 сек)'; log('Загружаем модель...');  
+const depthEstimator = await pipeline('depth-estimation', 'Xenova/depth-anything-small');  
+loadingEl.classList.remove('active'); log('✅ Модель готова! Выберите фото.');  
+fileInput.addEventListener('change', async function() {  
+    const file = fileInput.files[0];  
+    if (!file) { log('❌ Файл не выбран'); return; }  
+    log('Файл: ' + file.name + ' (' + file.size + ' байт)');  
+    const reader = new FileReader();  
+    reader.onload = async function(e) {  
+        const img = new Image();  
+        img.src = e.target.result;  
+        img.onload = async function() {  
+            log('Изображение: ' + img.width + 'x' + img.height);  
+            currentImage = img;  
+            document.getElementById('preview').src = img.src;  
+            loadingEl.classList.add('active');  
+            try {  
+                const result = await depthEstimator(img);  
+                depthData = result.data; depthWidth = result.width; depthHeight = result.height;  
+                log('✅ Глубина: ' + depthWidth + 'x' + depthHeight);  
+                loadingEl.classList.remove('active');  
+                updateLight();  
+            } catch (err) { log('❌ Ошибка: ' + err.message); loadingEl.classList.remove('active'); }  
+        };  
+        img.onerror = function() { log('❌ Не удалось загрузить изображение'); };  
+    };  
+    reader.onerror = function() { log('❌ Ошибка чтения файла'); };  
+    reader.readAsDataURL(file);  
+    fileInput.value = '';  
+});  
+window.openCamera = function() { fileInput.setAttribute('capture', 'environment'); fileInput.click(); };  
+window.openGallery = function() { fileInput.removeAttribute('capture'); fileInput.click(); };  
+window.setStyle = function(style, el) {  
+    currentStyle = style;  
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));  
+    if (el) el.classList.add('active');  
+    updateLight();  
+    log('Стиль: ' + style);  
+};  
+window.updateLight = function() {  
+    if (!depthData || !currentImage) return;  
+    const azimuth = parseFloat(document.getElementById('azimuth').value);  
+    const elevation = parseFloat(document.getElementById('elevation').value);  
+    document.getElementById('azVal').textContent = azimuth + '°';  
+    document.getElementById('elVal').textContent = elevation + '°';  
+    const azRad = (azimuth * Math.PI) / 180, elRad = (elevation * Math.PI) / 180;  
+    const lightDir = { x: Math.cos(elRad)*Math.cos(azRad), y: Math.cos(elRad)*Math.sin(azRad), z: Math.sin(elRad) };  
+    const lightMap = computeLightMap(depthData, depthWidth, depthHeight, lightDir);  
+    const overlay = document.getElementById('depthOverlay');  
+    overlay.width = depthWidth; overlay.height = depthHeight;  
+    const ctx = overlay.getContext('2d');  
+    const imgData = new ImageData(depthWidth, depthHeight);  
+    for (let i = 0; i < lightMap.length; i++) {  
+        const val = lightMap[i];  
+        imgData.data[i*4]=0; imgData.data[i*4+1]=0; imgData.data[i*4+2]=0;  
+        imgData.data[i*4+3]=Math.round((1-val)*180);  
+    }  
+    const tempCanvas = document.createElement('canvas');  
+    tempCanvas.width = depthWidth; tempCanvas.height = depthHeight;  
+    tempCanvas.getContext('2d').putImageData(imgData, 0, 0);  
+    ctx.clearRect(0, 0, overlay.width, overlay.height);  
+    ctx.drawImage(tempCanvas, 0, 0, overlay.width, overlay.height);  
+};  
+function computeLightMap(depthArr, w, h, lightDir) {  
+    const depth2D = [];  
+    for (let y = 0; y < h; y++) { depth2D[y] = []; for (let x = 0; x < w; x++) { depth2D[y][x] = depthArr[y*w+x]; } }  
+    const normals = [];  
+    for (let y = 0; y < h; y++) {  
+        normals[y] = [];  
+        for (let x = 0; x < w; x++) {  
+            const dx = (x<w-1) ? (depth2D[y][x+1]-depth2D[y][x])*10 : 0;  
+            const dy = (y<h-1) ? (depth2D[y+1][x]-depth2D[y][x])*10 : 0;  
+            const len = Math.sqrt(dx*dx+dy*dy+1);  
+            normals[y][x] = { x: -dx/len, y: -dy/len, z: 1/len };  
+        }  
+    }  
+    const lightMap = [];  
+    for (let y = 0; y < h; y++) {  
+        for (let x = 0; x < w; x++) {  
+            const n = normals[y][x];  
+            let NdotL = n.x*lightDir.x + n.y*lightDir.y + n.z*lightDir.z;  
+            NdotL = Math.max(0, NdotL);  
+            const ambient = 0.15;  
+            lightMap.push(Math.min(1, ambient + (1-ambient)*NdotL));  
+        }  
+    }  
+    return lightMap;  
+}  
+</script>  
+</body>  
+</html>  
